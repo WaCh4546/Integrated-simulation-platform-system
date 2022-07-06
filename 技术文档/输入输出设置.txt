@@ -1,0 +1,17 @@
+配置-i/o system -signal
+  创建 di_start，di_stop，vdo_start,vdo_stop,DstopEGM
+配置-i/o system -system input
+ 将di_start和di_stop关联到 start at main，和stop
+配置-i/o system -cross connection
+创建start1 resultant：di_start ；actor1：vdo_start;;;;;stop1 resultant：di_stop ；actor1：vdo_stop
+
+
+即创建输入输出，使用cross connection 将输入输出连接；将输入关联到系统的启动和停止；使用pulseDO 指令来控制输出从而控制输入关联的系统启动和停止。
+
+
+    rx=-92.3569
+    ry=-2.38861
+    rz=-90.7107
+    dx=-524.965
+    dy=60.6973
+    dz=91.0749
