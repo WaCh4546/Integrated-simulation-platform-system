@@ -1,9 +1,10 @@
 import cv2
 import math
 import time
-import win32api,win32con
+import win32api, win32con
 import threading
 import pygame
+import psutil
 import numpy as np
 from enum import Enum
 
@@ -14,6 +15,8 @@ from JoyStick import TestJoystick_Plane
 from CVMenu import CVMenu
 from ICCamera import ICCamera
 from Axis7 import *
+from Gyro import gyro_indicator
+from ImgTrans import ImgTrans
 
 
 """
@@ -25,24 +28,36 @@ from Axis7 import *
 ROBOT_IP = "192.168.1.104"
 ROBOT_PORT = 8002
 
+USCREEN_IP = "192.168.1.111"
+USCREEN_PORT = 10001
+
 EGM_IP = ROBOT_IP
-EGM_PORT = 6511
+EGM_PORT = 6510
 
-#AXIS7_IP = "192.168.1.6"
-AXIS7_IP = "127.0.0.1"
-AXIS7_PORT = 4196
-AXIS7_LOCAL_PORT = 1234
+AXIS7_IP = "192.168.1.105"
+AXIS7_PORT = 2001
+AXIS7_LOCAL_PORT = 2002
 
-CAMERA = "DFK 33UX250 12125088"
-
-TEST_IN_LAB = True
+TEST_IN_LAB = False
 NO_ROBOT = False
 
+euler_K = 0.6        # euler angle low-pass filter parameter. A smaller euler_K leads to faster rotation.
+yaw_max = 10.0
+pitch_max = 10.0
+roll_max = 15.0
+
+z_max = 250
+y_max = 500
+
+pitch_to_spd = 16 #8
+roll_to_spd = 16 #8
+max_speed_x = 40
+
 FIXED_POS_EULERS = {
-            'EGM start': [(4000, 0, -1200, 0, 30, 0, 100, 0)],
-            'rest': [(4880, 0, -320, 0, 0, 0, 100, 0)],
-            'projector': [(4880, 0, -320, 0, 0, 0, 100, 0)],
-            'maintenance': [(4000, -2240, -3000, -25, 28, 0, 100, 0)]
+            'EGM start': [(2250, 0, 1250, 0, 0, 0, 100, 0)],
+            'rest': [(2000, 0, 1200, 0, 0, 0, 100, 0)],
+            'projector': [(2400, 0, -260, 0, 35, 0, 100, 0)],
+            'maintenance': [(2300, 0, 280, 0, 35, 0, 100, 0)]
         }
 
 
@@ -51,19 +66,22 @@ class PlaneCtrlThread(threading.Thread):
         threading.Thread.__init__(self)
         self.robot = None
         self.lock = lock
-        self.z_neutral = 1100
         self.terminated = False
 
         # control range
         # the x movement is carried out by axis7, so it is left 0 here.
         self.max_range = (0, 500, 300, 10, 15, 15)
         self.lin_range = (0, 450, 250, 8, 13, 13)
-        self.ctrl_interval = 0.02
+        self.ctrl_interval = 0.01
 
-        self.pos_euler_neu = self.pos_euler = self.speed = (0, 0, 0, 0, 0, 0)
+        self.pos_euler_neu = self.pos_euler = (0, 0, 0, 0, 0, 0)
+        self.input = (0, 0, 0)
 
         self.__lst_time = time.time()
         self.loop_time = 0
+
+        self.euler_K = 0.6
+        self.euler_to_spd = 16
 
     @staticmethod
     def __sigmoid(x, lin_x, max_x):
@@ -79,19 +97,34 @@ class PlaneCtrlThread(threading.Thread):
                 y = -y
         return y
 
+    @staticmethod
+    def __lowpass(x, lst_y, k):
+        return lst_y * k + x * (1.0 - k)
+
     def __speed_accumulate(self, speed, cur_x, lin_x, max_x):
         cur_x += speed * self.ctrl_interval
         cur_x = self.__sigmoid(cur_x, lin_x, max_x)
         return cur_x
 
-    def __calc_pos_euler(self, speed):
-        pos_euler = (0,
-                     self.__speed_accumulate(speed[1], self.pos_euler[1], self.lin_range[1], self.max_range[1]),
-                     self.__speed_accumulate(speed[2], self.pos_euler[2], self.lin_range[2], self.max_range[2]),
-                     self.__speed_accumulate(speed[3], self.pos_euler[3], self.lin_range[3], self.max_range[3]),
-                     self.__speed_accumulate(speed[4], self.pos_euler[4], self.lin_range[4], self.max_range[4]),
-                     self.__speed_accumulate(speed[5], self.pos_euler[5], self.lin_range[5], self.max_range[5]))
-        return pos_euler
+    def __calc_pos_euler(self, input):
+        # translate joystick input into euler angles
+        yaw = input[0] * yaw_max
+        pitch = -input[1] * pitch_max
+        roll = input[2] * roll_max
+
+        # the euler angles are low-pass filtered such that they don't change too fast
+        yaw = self.__lowpass(yaw, self.pos_euler[3], self.euler_K)
+        pitch = self.__lowpass(pitch, self.pos_euler[4], self.euler_K)
+        roll = self.__lowpass(roll, self.pos_euler[5], self.euler_K)
+
+        # calculate y and z movement
+        y_spd = -roll * self.euler_to_spd
+        z_spd = -pitch * self.euler_to_spd
+
+        y = self.__speed_accumulate(y_spd, self.pos_euler[1], y_max * 0.9, y_max)
+        z = self.__speed_accumulate(z_spd, self.pos_euler[2], z_max * 0.9, z_max)
+
+        return (0.0, y, z, yaw, pitch, roll)
 
     def start_ctrl(self):
         try:
@@ -105,8 +138,7 @@ class PlaneCtrlThread(threading.Thread):
 
             self.robot = robot
             self.pos_euler_neu = init_pos_euler
-            self.pos_euler = (0, 0, 0, 0, 0, 0)
-            self.speed = (0, 0, 0, 0, 0, 0)
+            self.pos_euler = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         finally:
             self.lock.release()
 
@@ -120,7 +152,7 @@ class PlaneCtrlThread(threading.Thread):
             time.sleep(self.ctrl_interval)
 
             self.lock.acquire()
-            self.pos_euler = self.__calc_pos_euler(self.speed)
+            self.pos_euler = self.__calc_pos_euler(self.input)
             if self.robot is not None:
                 pos_euler = (self.pos_euler[0] + self.pos_euler_neu[0],
                              self.pos_euler[1] + self.pos_euler_neu[1],
@@ -139,7 +171,8 @@ class Interfaces(Enum):
     ROOT = 0,
     PARK = 1,
     TEST = 2,
-    AXIS7 = 3
+    AXIS7 = 3,
+    SPEED = 4
 
 
 class PlaneCtrl(object):
@@ -162,6 +195,19 @@ class PlaneCtrl(object):
         self.__cur_interface = Interfaces.ROOT
         self.__enter_root_interface()
 
+        self.__gyro = gyro_indicator(width=300)
+        self.__recording = False
+
+        self.img_trans = ImgTrans((USCREEN_IP, USCREEN_PORT))
+
+        try:
+            spd = np.loadtxt("PlaneSpeed.npy")
+            self.rotation_spd = spd[0]
+            self.movement_spd = spd[1]
+        except:
+            self.rotation_spd = 0.6
+            self.movement_spd = 10
+
     def __init_hardwares(self):
         # Initialize the joystick. Exit if no joystick exists
         try:
@@ -173,8 +219,13 @@ class PlaneCtrl(object):
             exit(0)
 
         # Initialize the front camera.
+        self.camera = None
         try:
-            self.camera = ICCamera(CAMERA)
+            dev_names = ICCamera.enum_names()
+            if len(dev_names) == 0:
+                print("The camera is not mounted!")
+            else:
+                self.camera = ICCamera(device_name=dev_names[0], dev_format="RGB32 (2048x1536)")
         except Exception as info:
             self.camera = None
             self.__print(info.args[0])
@@ -187,7 +238,11 @@ class PlaneCtrl(object):
                     raise Exception("Failed to connect robot!")
                 if not self.robot.start():
                     raise Exception("Failed to start robot!")
+
+                # clear error status
+                time.sleep(1)
                 self.robot.clear()
+                time.sleep(1)
             except Exception as info:
                 self.robot = None
                 self.__print(info)
@@ -236,6 +291,8 @@ class PlaneCtrl(object):
             self.__menu_select_TEST(menu_item)
         elif self.__cur_interface == Interfaces.AXIS7:
             self.__menu_select_AXIS7(menu_item)
+        elif self.__cur_interface == Interfaces.SPEED:
+            self.__menu_select_SPEED(menu_item)
 
     def __menu_select_ROOT(self, menu_item):
         caption = menu_item['caption']
@@ -246,6 +303,14 @@ class PlaneCtrl(object):
             self.__enter_test_interface()
         elif caption == "Axis7 manual control":
             self.__enter_axis7_interface()
+        elif caption == "Start recording":
+            menu_item['caption'] = "Stop recording"
+            self.__recording = True
+        elif caption == "Stop recording":
+            menu_item['caption'] = "Start recording"
+            self.__recording = False
+        elif caption == "Set moving speed":
+            self.__enter_speed_interface()
         elif caption == "Exit":
             self.plane_ctrl_thread.terminated = True
             self.plane_ctrl_thread.join()
@@ -264,6 +329,7 @@ class PlaneCtrl(object):
                 pos_euler = FIXED_POS_EULERS['rest']
             elif caption == "Park for projector":
                 pos_euler = FIXED_POS_EULERS['projector']
+                print("projector")
             elif caption == "Park for maintenance":
                 pos_euler = FIXED_POS_EULERS['maintenance']
 
@@ -281,15 +347,37 @@ class PlaneCtrl(object):
 
         if caption == "Go zero":
             self.axis7.cmd = AXIS7_CMD.GO_ZERO
-        elif caption == "Move to far position":
+        elif caption == "Go to the middle position":
+            self.axis7.cmd = AXIS7_CMD.GO_MIDDLE
+        elif caption == "Move forward":
             self.axis7.cmd = AXIS7_CMD.MOVE_FWD
-        elif caption == "Move to near position":
+        elif caption == "Move backward":
             self.axis7.cmd = AXIS7_CMD.MOVE_BKWD
         elif caption == "Stop":
             self.axis7.cmd = AXIS7_CMD.STOP
         elif caption == "Exit":
             self.axis7.cmd = AXIS7_CMD.STOP
             self.__enter_root_interface()
+
+    def __menu_select_SPEED(self, menu_item):
+        caption = menu_item['caption']
+
+        if caption == "Increase rotation":
+            self.rotation_spd = min(0.9, self.rotation_spd + 0.1)
+            self.__print("Rotation speed = %1.1f" % self.rotation_spd, color=(0, 255, 0))
+        elif caption == "Decrease rotation":
+            self.rotation_spd = max(0.3, self.rotation_spd - 0.1)
+            self.__print("Rotation speed = %1.1f" % self.rotation_spd, color=(0, 255, 0))
+        elif caption == "Increase movement":
+            self.movement_spd = min(24, self.movement_spd + 2)
+            self.__print("Movement speed = %1.1f" % self.movement_spd, color=(0, 255, 0))
+        elif caption == "Decrease movement":
+            self.movement_spd = max(8, self.movement_spd - 2)
+            self.__print("Movement speed = %1.1f" % self.movement_spd, color=(0, 255, 0))
+        elif caption == "Exit":
+            self.__enter_root_interface()
+
+        np.savetxt("PlaneSpeed.npy", (self.rotation_spd, self.movement_spd))
 
     def __enter_root_interface(self):
         # When the interface switches from manual test control to root, the test shall be stopped.
@@ -308,14 +396,15 @@ class PlaneCtrl(object):
         self.menu.add_item("Park robot")
         self.menu.add_item("Axis7 manual control")
         self.menu.add_item("Start test")
-        self.menu.add_item("Start recording")
+        self.menu.add_item("Start recording") if not self.__recording else self.menu.add_item("Stop recording")
+        self.menu.add_item("Set moving speed")
         self.menu.add_item("Exit")
         self.__cur_interface = Interfaces.ROOT
 
     def __enter_park_interface(self):
         self.menu.clear()
         self.menu.add_item("Park for rest")
-        self.menu.add_item("Park for projector ")
+        self.menu.add_item("Park for projector")
         self.menu.add_item("Park for maintenance")
         self.menu.add_item("Stop robot")
         self.menu.add_item("Exit")
@@ -324,8 +413,9 @@ class PlaneCtrl(object):
     def __enter_axis7_interface(self):
         self.menu.clear()
         self.menu.add_item("Go zero")
-        self.menu.add_item("Move to far position")
-        self.menu.add_item("Move to near position")
+        self.menu.add_item("Go to the middle position")
+        self.menu.add_item("Move forward")
+        self.menu.add_item("Move backward")
         self.menu.add_item("Stop")
         self.menu.add_item("Exit")
         self.__cur_interface = Interfaces.AXIS7
@@ -339,6 +429,15 @@ class PlaneCtrl(object):
         self.menu.clear()
         self.menu.add_item("Exit")
         self.__cur_interface = Interfaces.TEST
+
+    def __enter_speed_interface(self):
+        self.menu.clear()
+        self.menu.add_item("Increase rotation")
+        self.menu.add_item("Decrease rotation")
+        self.menu.add_item("Increase movement")
+        self.menu.add_item("Decrease movement")
+        self.menu.add_item("Exit")
+        self.__cur_interface = Interfaces.SPEED
 
     def __interface_operate(self):
         if self.__cur_interface == Interfaces.ROOT:
@@ -370,13 +469,19 @@ class PlaneCtrl(object):
             self.plane_ctrl_thread.start_ctrl()
 
     def __robot_manual_control(self):
+        """
         speed = self.__joystick_input_to_speed(self.joystick.yaw, self.joystick.pitch,
                                                self.joystick.roll, self.joystick.throttle)
         self.plane_ctrl_thread.speed = speed
+        """
+        # rotation_spd and movement_spd can both be modified online and stored
+        self.plane_ctrl_thread.euler_K = self.rotation_spd
+        self.plane_ctrl_thread.euler_to_spd = self.movement_spd
+        self.plane_ctrl_thread.input = (self.joystick.yaw, self.joystick.pitch, self.joystick.roll)
 
         if self.axis7.zeroed:
             self.axis7.cmd = AXIS7_CMD.NORMAL_CTRL
-            self.axis7.speed = speed[0]
+            self.axis7.speed = -int(self.joystick.throttle * max_speed_x)
         else:
             self.axis7.cmd = AXIS7_CMD.STOP
 
@@ -385,40 +490,42 @@ class PlaneCtrl(object):
         So far we only use a very simple model here. It is necessary to replace with a better model.
         """
         spd_x = throttle * 5
-        spd_yaw = yaw * 5
-        spd_pitch = pitch * 5
-        spd_roll = roll * 5
-        spd_y = self.plane_ctrl_thread.pos_euler[5] * 2
-        spd_z = self.plane_ctrl_thread.pos_euler[4] * 2
+        spd_yaw = yaw * 8
+        spd_pitch = pitch * 5  #5
+        spd_roll = roll * 5    #5
+        spd_y = self.plane_ctrl_thread.pos_euler[5] * 10   #2
+        spd_z = self.plane_ctrl_thread.pos_euler[4] * 10   #2
         return spd_x, spd_y, spd_z, spd_yaw, spd_pitch, spd_roll
 
-    def __show_ctrl_status(self, img, y_pos):
-        cv2.putText(img, "x = %1.1f, y = %1.1f, z = %1.0f" % (self.axis7.position,
+    def __show_ctrl_status(self, img, row_begin):
+        cv2.putText(img, "X = %1.1f, Y = %1.1f, Z = %1.0f" % (self.axis7.position,
                                                               self.plane_ctrl_thread.pos_euler[1],
                                                               self.plane_ctrl_thread.pos_euler[2]),
-                    (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 255, 20), 1)
-        y_pos += 20
+                    (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 255, 20), 1)
+        row_begin += 20
 
-        cv2.putText(img, "Yaw = %1.2f, pitch = %1.2f, roll = %1.2f" % (self.plane_ctrl_thread.pos_euler[3],
+        cv2.putText(img, "Yaw = %1.2f, Pitch = %1.2f, Roll = %1.2f" % (self.plane_ctrl_thread.pos_euler[3],
                                                                        self.plane_ctrl_thread.pos_euler[4],
                                                                        self.plane_ctrl_thread.pos_euler[5]),
-                    (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 255, 20), 1)
-        y_pos += 20
+                    (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 255, 20), 1)
+        row_begin += 20
 
+        """
         cv2.putText(img, "main thread time = %1.3fms, plane thread time = %1.3fms" %
                     ((time.time() - self.__lst_time) * 1000, self.plane_ctrl_thread.loop_time),
-                    (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 255, 20), 1)
+                    (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 255, 20), 1)
         self.__lst_time = time.time()
-        y_pos += 20
+        row_begin += 20
+        """
 
-        return y_pos
+        return row_begin
 
     def __show_robot_status(self, img, row_begin):
         if self.robot is None:
             return row_begin
 
         if self.robot.EGM:
-            cv2.putText(img, "Robot in EGM mode", (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            cv2.putText(img, "Robot in EGM mode", (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         elif self.robot.refresh_status():
             if self.robot.status < 0:
                 cv2.putText(img, "Robot error: " + self.robot.error, (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
@@ -440,9 +547,8 @@ class PlaneCtrl(object):
         return row_begin
 
     def __draw_info_strings(self, img, row_begin):
-        for i, string in enumerate(self.__log_string):
-            cv2.putText(img, self.__log_string[i][0], (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, self.__log_string[i][1], 1)
+        for i, row in enumerate(self.__log_string):
+            cv2.putText(img, row[0], (20, row_begin), cv2.FONT_HERSHEY_SIMPLEX, 0.5, row[1], 1)
             row_begin += 20
         return row_begin
 
@@ -450,10 +556,16 @@ class PlaneCtrl(object):
         img = cv2.resize(img, self.screen_size)
 
         self.menu.refresh(img)
-        row = self.__show_ctrl_status(img, 220)
-        row = self.__show_robot_status(img, row)
-        row = self.__show_axis7_status(img, row)
-        row = self.__draw_info_strings(img, row)
+        row = self.__show_ctrl_status(img, row_begin=220)
+        row = self.__show_robot_status(img, row_begin=row)
+        row = self.__show_axis7_status(img, row_begin=row)
+        row = self.__draw_info_strings(img, row_begin=row)
+
+        self.__gyro.draw_on_screen(pitch=-self.plane_ctrl_thread.pos_euler[4],
+                                   roll=-self.plane_ctrl_thread.pos_euler[5],
+                                   screen=img,
+                                   left=img.shape[1] - 350,
+                                   top=50)
 
         cv2.imshow("window", img)
         return img
@@ -472,7 +584,7 @@ class PlaneCtrl(object):
             self.__video = None
 
     def refresh(self):
-        time.sleep(0.05)
+        time.sleep(0.02)
 
         # refresh joystick and operations
         self.joystick.refresh()
@@ -487,12 +599,31 @@ class PlaneCtrl(object):
         else:
             frame = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
         frame = self.__show_interface(frame)
+        self.img_trans.send(frame)
 
         self.__video_record(frame)
 
 
+def check_process_exist(proc_name):
+    return False
+
+    proc_cnt = 0
+    for proc in psutil.process_iter():
+        try:
+            pinfo = proc.as_dict(attrs=["pid", "name"])
+        except psutil.NoSuchProcess:
+            pass
+        else:
+            if pinfo["name"] == proc_name:
+                proc_cnt += 1
+    return proc_cnt > 1
+
+
 if __name__ == '__main__':
-    plane = PlaneCtrl()
-    while True:
-        plane.refresh()
+    if not check_process_exist("python.exe"):
+        plane = PlaneCtrl()
+        while True:
+            plane.refresh()
+    else:
+        print("PlaneCtrl cannot be opened repeatedly")
 

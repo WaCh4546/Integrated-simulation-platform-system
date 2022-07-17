@@ -90,28 +90,39 @@ class PlaneJoystick(object):
             if "Joystick" in stick.name():
                 self.joystick = stick
             elif "Throttle" in stick.name():
-                self.throttle = stick
+                self.throttle_stick = stick
             elif "Rudder" in stick.name():
                 self.rudder = stick
 
         if self.joystick is None:
             raise Exception("joystick is not connected")
-        if self.throttle is None:
+        if self.throttle_stick is None:
             raise Exception("throttle is not connected")
         if self.rudder is None:
             raise Exception("ruddle is not connected")
 
+        self.yaw = 0
+        self.pitch = 0
+        self.roll = 0
+        self.throttle = 0
+        self.menu_option = 0
+
     def refresh(self):
         self.joystick.refresh()
-        self.throttle.refresh()
+        self.throttle_stick.refresh()
         self.rudder.refresh()
 
-        yaw = self.rudder.axis[2]
-        pitch = self.joystick.axis[1]
-        roll = self.joystick.axis[0]
-        throttle = self.throttle.axis[2]
+        self.yaw = self.rudder.axis[2]
+        self.pitch = self.joystick.axis[1]
+        self.roll = self.joystick.axis[0]
+        self.throttle = self.throttle_stick.axis[2]
 
-        return yaw, pitch, roll, throttle
+        if self.joystick.hat_click[0][1]:
+            self.menu_option = self.joystick.hat[0][1]
+        elif self.joystick.button_click[1]:
+            self.menu_option = 2
+        else:
+            self.menu_option = 0
 
 
 class TestJoystick_Plane(object):
@@ -174,7 +185,6 @@ class BoomJoystick(object):
 
         self.yaw = self.joystick.axis[0]
         self.pitch = self.joystick.axis[1]
-        #self.stretch = self.joystick.button[0] - self.joystick.button[3]
         self.stretch = (1.0 - self.throttle.axis[2]) / 2.0
 
         self.track_click = self.joystick.button_click[6]
@@ -214,12 +224,11 @@ class TestJoystick_Boom(object):
         self.pitch = self.joystick.axis[1]
         self.stretch = self.joystick.button[0] - self.joystick.button[2]
 
+        # menu_option should be cleared manually
         if self.joystick.hat_click[0][1]:
             self.menu_option = self.joystick.hat[0][1]
         elif self.joystick.button_click[1]:
             self.menu_option = 2
-        else:
-            self.menu_option = 0
 
         self.track_click = self.joystick.button_click[6]
         self.track_x = self.joystick.button[4] - self.joystick.button[5]

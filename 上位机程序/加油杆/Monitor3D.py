@@ -3,11 +3,12 @@ import cv2
 import win32api,win32con
 
 CORNER_POS = 1.0 / 3.0
+USED_ENVIRONMENT = 2        # 1 for 609, 2 for our lab
 
 
 class Monitor3D(object):
-    def __init__(self, trans_mat_file=None):
-        self.__init_screen()
+    def __init__(self, trans_mat_file=None, screens=None):
+        self.__init_screen(screens)
         try:
             self.load_trans_mat(trans_mat_file)
         except:
@@ -16,14 +17,29 @@ class Monitor3D(object):
     def load_trans_mat(self, mat_file):
         self.__trans_mat = np.loadtxt(mat_file)
 
-    def __init_screen(self):
+    def __init_screen(self, screens):
+        # it may be needed to modify screen initialization according to the computer configuration.
         width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
         height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-        self.screen_size = (int(width / 2), height)
 
-        cv2.namedWindow('window', cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        cv2.moveWindow('window', 0, 0)
+        if screens is None:
+            self.screen_size = (int(width / 2), height)
+            self.twin_screen = False
+
+            cv2.namedWindow('window', cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.moveWindow('window', 0, 0)
+        else:
+            self.screen_size = (width, height)
+            self.twin_screen = True
+
+            cv2.namedWindow('window1', cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty('window1', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.moveWindow('window1', width, screens[0] * width)
+
+            cv2.namedWindow('window2', cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty('window2', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.moveWindow('window2', screens[1] * width, 0)
 
     def __start_calibration(self):
         self.corner_supposed = list()
@@ -48,6 +64,8 @@ class Monitor3D(object):
 
             cv2.circle(img1, (x1, y1), radius=10, color=(0, 255, 0), thickness=-1)
             cv2.circle(img2, (x2, y2), radius=10, color=(0, 0, 255), thickness=-1)
+            cv2.putText(img1, "Click 'S' when you finished adjusting", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (20, 255, 20), 1)
             self.show(img1, img2, no_correction=True)
 
             key = cv2.waitKeyEx()
@@ -117,6 +135,8 @@ class Monitor3D(object):
 
             cv2.circle(img1, (x1, y1), radius=10, color=(0, 0, 255), thickness=-1)
             cv2.circle(img2, (x2, y2), radius=10, color=(0, 255, 0), thickness=-1)
+        cv2.putText(img1, "Click 'S' to save calculated transforming matrix", (20, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (20, 255, 20), 1)
         self.show(img1, img2)
 
     def calibrate(self, save_file=None):
@@ -134,7 +154,6 @@ class Monitor3D(object):
     def test_calibrate(self):
         self.__start_calibration()
         self.__test_calibration()
-        key = cv2.waitKey()
 
     def refresh_trans_mat(self):
         self.__trans_mat = self.__calc_trans_mat(self.corner_supposed, self.corner_adjusted)
@@ -143,40 +162,50 @@ class Monitor3D(object):
         screen1 = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
         screen2 = np.zeros((self.screen_size[1], self.screen_size[0], 3), dtype=np.uint8)
 
-        if img1.shape[1] / img1.shape[0] > self.screen_size[0] / self.screen_size[1]:
-            # the image is wider than the screen
-            width = self.screen_size[0]
-            height = int(img1.shape[0] * width / img1.shape[1])
+        if img1 is not None:
+            # the w/h ratio of the image is larger than that of the screen
+            # so width of the image is used for resizing
+            if img1.shape[1] / img1.shape[0] > self.screen_size[0] / self.screen_size[1]:
+                width = self.screen_size[0]
+                height = int(img1.shape[0] * width / img1.shape[1])
+                top = int((self.screen_size[1] - height) / 2)
 
-            img1 = cv2.resize(img1, (width, height))
-            img2 = cv2.resize(img2, (width, height))
+                # image is resized to fit screen if its width no equal to screen
+                if img1.shape[0] != self.screen_size[0]:
+                    img1 = cv2.resize(img1, (width, height))
+                screen1[top: top + height, :, :] = img1[:, :, :]
 
-            top = int((self.screen_size[1] - height) / 2)
-            screen1[top: top + height, :, :] = img1[:, :, :]
-            screen2[top: top + height, :, :] = img2[:, :, :]
-        else:
-            height = self.screen_size[1]
-            width = int(img1.shape[1] * height / img1.shape[0])
+                if img2 is not None:
+                    if img2.shape[0] != self.screen_size[0]:
+                        img2 = cv2.resize(img2, (width, height))
+                    screen2[top: top + height, :, :] = img2[:, :, :]
+            else:
+                height = self.screen_size[1]
+                width = int(img1.shape[1] * height / img1.shape[0])
+                left = int((self.screen_size[0] - width) / 2)
 
-            img1 = cv2.resize(img1, (width, height))
-            img2 = cv2.resize(img2, (width, height))
+                if img1.shape[1] != self.screen_size[1]:
+                    img1 = cv2.resize(img1, (width, height))
+                screen1[:, left: left + width, :] = img1[:, :, :]
 
-            left = int((self.screen_size[0] - width) / 2)
-            screen1[:, left: left + width, :] = img1[:, :, :]
-            screen2[:, left: left + width, :] = img2[:, :, :]
+                if img2 is not None:
+                    if img1.shape[1] != self.screen_size[1]:
+                        img2 = cv2.resize(img2, (width, height))
+                    screen2[:, left: left + width, :] = img2[:, :, :]
 
         if not no_correction:
             screen2 = cv2.warpPerspective(screen2, self.__trans_mat, self.screen_size)
-        screen2 = cv2.flip(screen2, 1)
 
-        screen = cv2.hconcat((screen1, screen2))
-        cv2.imshow('window', screen)
+        if self.twin_screen:
+            screen2 = cv2.flip(screen2, 0)
+            cv2.imshow('window1', screen1)
+            cv2.imshow('window2', screen2)
+        else:
+            screen2 = cv2.flip(screen2, 1)
+            screen = cv2.hconcat((screen1, screen2))
+            cv2.imshow('window', screen)
 
 
 if __name__ == "__main__":
     monitor = Monitor3D(trans_mat_file="monitor_cali.mat")
-    #monitor.calibrate(save_file="monitor_cali.mat")
-    monitor.test_calibrate()
-    #img = cv2.imread("g:\\IMG_6104.jpg")
-    #monitor.show(img, img)
-    cv2.waitKey()
+    monitor.calibrate(save_file="monitor_cali.mat")
