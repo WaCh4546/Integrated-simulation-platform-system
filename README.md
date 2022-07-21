@@ -11,6 +11,8 @@
 飞机受油口、伞套的自动识别均采用yolov4网络
 
 「加油伞套训练集」 https://www.aliyundrive.com/s/bsdg7AqxnaN 提取码: x0z6
+
 「受油口训练集」 https://www.aliyundrive.com/s/gVt3xaTP67X 提取码: 58xu
 
 「标注程序」https://www.aliyundrive.com/s/3fMTjtvo18Y 提取码: tk33
+
