@@ -10,7 +10,8 @@ from xml.etree.ElementTree import Element,ElementTree
 import xml.etree.ElementTree as ET
 class MaterialBag(Marking):
     """description of class"""
-    def __init__(self):
+    def __init__(self,classlabel):
+        self.classlabel=classlabel
         super(MaterialBag, self).__init__()
         self.tips()
 
@@ -62,7 +63,8 @@ class MaterialBag(Marking):
         img1=self.IMG_TEMP[-1].copy()
         x=img1.shape[1]*X/self.label.width()
         y=img1.shape[0]*Y/self.label.height()
-        img_=circle(img1,center =(int(x),int(y)),radius = 6,color = (0,0,255),thickness = -1)
+        l=max(int((img1.shape[1]/self.label.width()+img1.shape[0]/self.label.height())/2),1)
+        img_=circle(img1,center =(int(x),int(y)),radius = 6*l,color = (0,0,255),thickness = -1)
         self.IMG_TEMP.append(img_)
         frame = cvtColor(img_, COLOR_RGB2BGR)
         img = QImage(frame.data, frame.shape[1], frame.shape[0],frame.shape[1]*3, QImage.Format_RGB888)#第四个参数设置通道数对齐,不然图片可能会变形
@@ -94,17 +96,20 @@ class MaterialBag(Marking):
 
     def draw(self,img,data,XY):
 
-        line(img,(data[0][0],data[0][1]),(data[0][0],data[1][1]),color=(255,0,0),thickness=int(img.shape[0]/400))
-        line(img,(data[0][0],data[0][1]),(data[1][0],data[0][1]),color=(255,0,0),thickness=int(img.shape[0]/400))
-        line(img,(data[1][0],data[1][1]),(data[1][0],data[0][1]),color=(255,0,0),thickness=int(img.shape[0]/400))
-        line(img,(data[1][0],data[1][1]),(data[0][0],data[1][1]),color=(255,0,0),thickness=int(img.shape[0]/400))
-        img=circle(img,center =(int((data[0][0]+data[1][0])/2),int((data[0][1]+data[1][1])/2)),radius = int(img.shape[0]/150),color = (255,0,255),thickness = -1)
+        l=max(int((img.shape[1]/self.label.width()+img.shape[0]/self.label.height())/2),1)
+
+
+        line(img,(data[0][0],data[0][1]),(data[0][0],data[1][1]),color=(255,0,0),thickness=2*l)
+        line(img,(data[0][0],data[0][1]),(data[1][0],data[0][1]),color=(255,0,0),thickness=2*l)
+        line(img,(data[1][0],data[1][1]),(data[1][0],data[0][1]),color=(255,0,0),thickness=2*l)
+        line(img,(data[1][0],data[1][1]),(data[0][0],data[1][1]),color=(255,0,0),thickness=2*l)
+        img=circle(img,center =(int((data[0][0]+data[1][0])/2),int((data[0][1]+data[1][1])/2)),radius = 4*l,color = (255,0,255),thickness = -1)
 
         t= 1 if data[2]>=0 else -1
         step=t*int(((XY[0][0]-XY[1][0])**2+(XY[0][1]-XY[1][1])**2)**0.5)
-        line(img,(XY[0][0],XY[0][1]),(XY[1][0],XY[1][1]),color=(0,255,0),thickness=int(img.shape[0]/400))
-        line(img,(XY[0][0],XY[0][1]),(XY[0][0]+step,XY[0][1]),color=(0,255,0),thickness=int(img.shape[0]/400))
-        img = putText(img, str(round(data[2],1)), (XY[0][0]+t*30, XY[0][1]+30), 0, 0.8, (0, 255, 0), int(img.shape[0]/400))
+        line(img,(XY[0][0],XY[0][1]),(XY[1][0],XY[1][1]),color=(0,255,0),thickness=2*l)
+        line(img,(XY[0][0],XY[0][1]),(XY[0][0]+step,XY[0][1]),color=(0,255,0),thickness=2*l)
+        img = putText(img, str(round(data[2],1)), (XY[0][0], XY[0][1]+30*l), 0, 0.8, (0, 255, 0),2*l)
 
 
     def savexml(self,path,f,delscr):
@@ -145,7 +150,7 @@ class MaterialBag(Marking):
             for r in result:
                 object= Element('object')
                 name= Element('name')
-                name.text='MaterialBag'
+                name.text=self.classlabel
                 object.append(name)
 
                 bndbox= Element('bndbox')

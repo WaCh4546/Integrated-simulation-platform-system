@@ -17,7 +17,9 @@ class MainWindow(QWidget,Ui_Marking):
         elif self.Model.currentText()=="伞套":
             self.run=UmbrellaCone("UmbrellaCone")
         elif self.Model.currentText()=="料带":
-            self.run=MaterialBag()
+            self.run=MaterialBag('MaterialBag')
+        elif self.Model.currentText()=="钢卷":
+            self.run=UmbrellaCone('SteelCoil')
             
         else:
             return
